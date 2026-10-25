@@ -54,6 +54,12 @@ English · [简体中文](README.md)
 
 Deep-space theme: `#070714` base + nebula glows and star specks, glass cards, indigo→cyan gradient `#6366F1→#22D3EE`, neon glow. Inspired by [uiverse.io/galaxy](https://github.com/uiverse-io/galaxy).
 
+## 📥 Download
+
+Grab the prebuilt APK: [releases/Ticka-v0.1.0.apk](releases/Ticka-v0.1.0.apk?raw=true) (12MB, debug-signed)
+
+Or build it yourself:
+
 ## 📦 Build
 
 ```bash

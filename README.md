@@ -54,6 +54,12 @@
 
 深空主题：底色 `#070714` + 星云光晕与星点、玻璃卡片、靛蓝→青主渐变 `#6366F1→#22D3EE`、霓虹辉光。设计灵感来自 [uiverse.io/galaxy](https://github.com/uiverse-io/galaxy)。
 
+## 📥 下载
+
+直接安装已构建好的 APK：[releases/Ticka-v0.1.0.apk](releases/Ticka-v0.1.0.apk?raw=true)（12MB，debug 签名）
+
+或自行构建：
+
 ## 📦 构建
 
 ```bash
