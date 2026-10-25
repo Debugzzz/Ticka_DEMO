@@ -1,4 +1,5 @@
 <div align="center">
+<img src="art/icon.png" width="180" alt="Ticka" />
 
 # Ticka ✦
 
