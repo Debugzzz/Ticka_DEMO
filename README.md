@@ -56,7 +56,7 @@
 
 ## 📥 下载
 
-直接安装已构建好的 APK：[releases/Ticka-v0.1.0.apk](releases/Ticka-v0.1.0.apk?raw=true)（12MB，debug 签名）
+直接安装已构建好的 APK：[releases/Ticka-v0.1.0.apk](releases/Ticka-v0.2.0.apk?raw=true)（约 12MB，debug 签名）
 
 或自行构建：
 

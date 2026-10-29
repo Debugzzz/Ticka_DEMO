@@ -185,7 +185,7 @@ object I18n {
     val about get() = if (en) "About" else "关于"
     fun aboutStats(stars: Int, skies: Int) = if (en) "$stars stars shining · $skies skies archived" else "正在点亮 $stars 颗星 · 已封存 $skies 片星空"
     val settle3am get() = if (en) "Daily checkpoint: 3:00 AM" else "每日结算点：凌晨 3 点"
-    val version get() = "Ticka v0.1.0"
+    val version get() = "Ticka v0.2.0"
 
     // ---------- 确认弹窗 ----------
     val restoreQ get() = if (en) "Restore from server?" else "从服务器恢复？"
