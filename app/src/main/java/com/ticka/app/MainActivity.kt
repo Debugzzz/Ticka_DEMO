@@ -12,9 +12,10 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         ReminderScheduler.ensureChannel(this)
+        val startTab = intent?.getIntExtra("start_tab", 0) ?: 0
         setContent {
             TickaTheme {
-                TickaApp()
+                TickaApp(initialTab = startTab)
             }
         }
     }

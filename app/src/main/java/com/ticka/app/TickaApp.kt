@@ -86,13 +86,13 @@ import kotlinx.coroutines.delay
 import kotlin.math.sin
 
 @Composable
-fun TickaApp(vm: TickaViewModel = viewModel()) {
+fun TickaApp(vm: TickaViewModel = viewModel(), initialTab: Int = 0) {
     val data by vm.data.collectAsState()
     val now by vm.now.collectAsState()
     val awarded by vm.lastAwarded.collectAsState()
     val message by vm.message.collectAsState()
 
-    var tab by remember { mutableStateOf(0) }
+    var tab by remember { mutableStateOf(initialTab.coerceIn(0, 3)) }
     var editingTask by remember { mutableStateOf<Task?>(null) }
     var focusTask by remember { mutableStateOf<Task?>(null) }
     var detailHabit by remember { mutableStateOf<Habit?>(null) }

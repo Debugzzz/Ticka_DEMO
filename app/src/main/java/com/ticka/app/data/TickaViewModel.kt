@@ -11,13 +11,19 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.util.UUID
+import java.util.concurrent.Executors
 import kotlin.random.Random
 
 class TickaViewModel(app: Application) : AndroidViewModel(app) {
 
     private val store = Store(app)
+
+    /** 所有磁盘写入都排到这个单线程，绝不并发写文件 */
+    private val storeExecutor = Executors.newSingleThreadExecutor()
+
     private val _data = MutableStateFlow(AppData())
     val data: StateFlow<AppData> = _data
 
@@ -45,10 +51,9 @@ class TickaViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun setLang(l: String) {
-        I18n.lang = l
-        _data.value = _data.value.copy(settings = _data.value.settings.copy(lang = l))
-        persist()
+    private fun persist() {
+        val snapshot = _data.value
+        storeExecutor.execute { store.save(snapshot) }
     }
 
     /** 旧版单一 serverUrl 自动拆分为 主机 + 路径 */
@@ -69,21 +74,22 @@ class TickaViewModel(app: Application) : AndroidViewModel(app) {
         return data
     }
 
-    private fun persist() {
-        val snapshot = _data.value
-        viewModelScope.launch(Dispatchers.IO) { store.save(snapshot) }
-    }
-
     fun showMessage(msg: String) { _message.value = msg }
     fun consumeMessage() { _message.value = null }
 
     /** 关闭获得星星浮层 */
     fun consumeAward() { _lastAwarded.value = null }
 
+    fun setLang(l: String) {
+        I18n.lang = l
+        _data.update { it.copy(settings = it.settings.copy(lang = l)) }
+        persist()
+    }
+
     // ---------- 待办 ----------
 
     fun upsertTask(task: Task) {
-        _data.value = _data.value.let { d ->
+        _data.update { d ->
             d.copy(tasks = if (d.tasks.any { it.id == task.id })
                 d.tasks.map { if (it.id == task.id) task else it }
             else d.tasks + task)
@@ -103,29 +109,41 @@ class TickaViewModel(app: Application) : AndroidViewModel(app) {
             } else {
                 starId = createStar(1, task.title).id
             }
-            upsertTask(task.copy(completed = true, completedAt = System.currentTimeMillis(), starId = starId))
+            _data.update { d ->
+                d.copy(tasks = d.tasks.map {
+                    if (it.id == id) it.copy(completed = true, completedAt = System.currentTimeMillis(), starId = starId) else it
+                })
+            }
+            persist()
         } else {
             // 取消完成：收回星星
             task.starId?.let { setStarRevoked(it, true) }
-            upsertTask(task.copy(completed = false, completedAt = null))
+            _data.update { d ->
+                d.copy(tasks = d.tasks.map {
+                    if (it.id == id) it.copy(completed = false, completedAt = null) else it
+                })
+            }
+            persist()
         }
     }
 
     fun deleteTask(id: String) {
-        _data.value = _data.value.copy(tasks = _data.value.tasks.filterNot { it.id == id })
+        _data.update { d -> d.copy(tasks = d.tasks.filterNot { it.id == id }) }
         ReminderScheduler.cancel(getApplication(), id)
         persist()
     }
 
     fun addPomodoro(id: String) {
-        val task = _data.value.tasks.find { it.id == id } ?: return
-        upsertTask(task.copy(pomodoros = task.pomodoros + 1))
+        _data.update { d ->
+            d.copy(tasks = d.tasks.map { if (it.id == id) it.copy(pomodoros = it.pomodoros + 1) else it })
+        }
+        persist()
     }
 
     // ---------- 目标 ----------
 
     fun upsertHabit(habit: Habit) {
-        _data.value = _data.value.let { d ->
+        _data.update { d ->
             d.copy(habits = if (d.habits.any { it.id == habit.id })
                 d.habits.map { if (it.id == habit.id) habit else it }
             else d.habits + habit)
@@ -139,23 +157,35 @@ class TickaViewModel(app: Application) : AndroidViewModel(app) {
         if (habit.records.containsKey(key)) {
             // 取消打卡：收回今天的星星
             habit.starIds[key]?.let { setStarRevoked(it, true) }
-            upsertHabit(habit.copy(records = habit.records - key, starIds = habit.starIds - key))
+            _data.update { d ->
+                d.copy(habits = d.habits.map {
+                    if (it.id == id) it.copy(records = it.records - key, starIds = it.starIds - key) else it
+                })
+            }
+            persist()
         } else {
             // 打卡：连续的每一天都有一颗星；取消后重打恢复同一颗
-            var starIds = habit.starIds
+            var newStar: Star? = null
             val existing = habit.starIds[key]?.let { sid -> _data.value.stars.find { it.id == sid } }
             if (existing != null) {
                 setStarRevoked(existing.id, false)
             } else {
-                val star = createStar(2, habit.name)
-                starIds = starIds + (key to star.id)
+                newStar = createStar(2, habit.name)
             }
-            upsertHabit(habit.copy(records = habit.records + (key to System.currentTimeMillis()), starIds = starIds))
+            _data.update { d ->
+                d.copy(habits = d.habits.map {
+                    if (it.id == id) {
+                        val starIds = if (newStar != null) it.starIds + (key to newStar.id) else it.starIds
+                        it.copy(records = it.records + (key to System.currentTimeMillis()), starIds = starIds)
+                    } else it
+                })
+            }
+            persist()
         }
     }
 
     fun deleteHabit(id: String) {
-        _data.value = _data.value.copy(habits = _data.value.habits.filterNot { it.id == id })
+        _data.update { d -> d.copy(habits = d.habits.filterNot { it.id == id }) }
         persist()
     }
 
@@ -175,14 +205,14 @@ class TickaViewModel(app: Application) : AndroidViewModel(app) {
         for (attempt in 0 until 80) {
             val x = 0.06f + Random.nextFloat() * 0.88f
             val y = 0.12f + Random.nextFloat() * 0.76f
-            var d = 1f
+            var dist = 1f
             for (s in placed) {
                 val dx = (x - s.x) * 1.3f
                 val dy = y - s.y
-                d = minOf(d, kotlin.math.sqrt(dx * dx + dy * dy))
+                dist = minOf(dist, kotlin.math.sqrt(dx * dx + dy * dy))
             }
-            if (d > bestDist) {
-                bestDist = d
+            if (dist > bestDist) {
+                bestDist = dist
                 bestX = x
                 bestY = y
             }
@@ -198,7 +228,7 @@ class TickaViewModel(app: Application) : AndroidViewModel(app) {
             x = bestX,
             y = bestY
         )
-        _data.value = _data.value.copy(stars = _data.value.stars + star)
+        _data.update { d -> d.copy(stars = d.stars + star) }
         _lastAwarded.value = star
         persist()
         return star
@@ -209,9 +239,9 @@ class TickaViewModel(app: Application) : AndroidViewModel(app) {
         starKinds[createStar(source, sourceName).kind].name
 
     private fun setStarRevoked(id: String, revoked: Boolean) {
-        _data.value = _data.value.copy(
-            stars = _data.value.stars.map { if (it.id == id) it.copy(revoked = revoked) else it }
-        )
+        _data.update { d ->
+            d.copy(stars = d.stars.map { if (it.id == id) it.copy(revoked = revoked) else it })
+        }
         persist()
     }
 
@@ -224,10 +254,9 @@ class TickaViewModel(app: Application) : AndroidViewModel(app) {
             stars = kept,
             archivedAt = System.currentTimeMillis()
         )
-        _data.value = _data.value.copy(
-            archivedSkies = _data.value.archivedSkies + archive,
-            stars = emptyList()
-        )
+        _data.update { d ->
+            d.copy(archivedSkies = d.archivedSkies + archive, stars = emptyList())
+        }
     }
 
     /** 手动封存当前星空，开启新的夜空 */
@@ -263,6 +292,15 @@ class TickaViewModel(app: Application) : AndroidViewModel(app) {
         return p.ifEmpty { "ticka.json" }
     }
 
+    /** 远端路径若是已存在的目录，落到其下 ticka.json */
+    private fun resolveRemotePath(sftp: com.jcraft.jsch.ChannelSftp, s: Settings): String {
+        val p = remotePath(s)
+        return runCatching {
+            val attrs = sftp.stat(p)
+            if (attrs.isDir) p.trimEnd('/') + "/ticka.json" else p
+        }.getOrElse { p }
+    }
+
     private fun sftpConnect(s: Settings): Pair<com.jcraft.jsch.Session, com.jcraft.jsch.ChannelSftp> {
         val (h, port) = splitHost(s.host)
         val jsch = com.jcraft.jsch.JSch()
@@ -274,15 +312,6 @@ class TickaViewModel(app: Application) : AndroidViewModel(app) {
         val sftp = session.openChannel("sftp") as com.jcraft.jsch.ChannelSftp
         sftp.connect(10_000)
         return session to sftp
-    }
-
-    /** 远端保存路径：空 = 家目录下 ticka.json；若目标是已存在的目录则落到其下 ticka.json */
-    private fun resolveRemotePath(sftp: com.jcraft.jsch.ChannelSftp, s: Settings): String {
-        val p = remotePath(s)
-        return runCatching {
-            val attrs = sftp.stat(p)
-            if (attrs.isDir) p.trimEnd('/') + "/ticka.json" else p
-        }.getOrElse { p }
     }
 
     private fun sftpPut(s: Settings, payload: String) {
@@ -329,15 +358,15 @@ class TickaViewModel(app: Application) : AndroidViewModel(app) {
             .removePrefix("https://")
             .removePrefix("http://")
             .trimEnd('/')
-        _data.value = _data.value.copy(
-            settings = _data.value.settings.copy(
+        _data.update { d ->
+            d.copy(settings = d.settings.copy(
                 host = cleanedHost,
                 username = username.trim(),
                 password = password,
                 path = path.trim(),
                 serverUrl = ""
-            )
-        )
+            ))
+        }
         persist()
         showMessage(I18n.cfgSaved)
     }
@@ -360,9 +389,9 @@ class TickaViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch(Dispatchers.IO) {
             runCatching { sftpPut(s, payload) }
                 .onSuccess {
-                    _data.value = _data.value.copy(
-                        settings = _data.value.settings.copy(lastSyncAt = System.currentTimeMillis())
-                    )
+                    _data.update { d ->
+                        d.copy(settings = d.settings.copy(lastSyncAt = System.currentTimeMillis()))
+                    }
                     persist()
                     showMessage(I18n.uploaded)
                 }
@@ -386,12 +415,12 @@ class TickaViewModel(app: Application) : AndroidViewModel(app) {
                 tickaJson.decodeFromString(AppData.serializer(), body)
             }.onSuccess { remote ->
                 I18n.lang = remote.settings.lang
+                _data.value.tasks.filter { !it.completed }
+                    .forEach { ReminderScheduler.cancel(getApplication(), it.id) }
                 // 备份不含密码：若本机已存密码而备份为空，保留本机凭证
                 val merged = if (remote.settings.password.isBlank() && _data.value.settings.password.isNotBlank())
                     remote.copy(settings = remote.settings.copy(password = _data.value.settings.password))
                 else remote
-                _data.value.tasks.filter { !it.completed }
-                    .forEach { ReminderScheduler.cancel(getApplication(), it.id) }
                 _data.value = merged
                 rescheduleAll()
                 persist()
@@ -418,16 +447,6 @@ class TickaViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun setSkyBackdrop(enabled: Boolean) {
-        _data.value = _data.value.copy(settings = _data.value.settings.copy(skyBackdrop = enabled))
-        persist()
-    }
-
-    fun setSkyCapacity(n: Int) {
-        _data.value = _data.value.copy(settings = _data.value.settings.copy(skyCapacity = n.coerceIn(10, 99)))
-        persist()
-    }
-
     fun importFrom(context: Context, uri: Uri) {
         viewModelScope.launch(Dispatchers.IO) {
             runCatching {
@@ -435,6 +454,7 @@ class TickaViewModel(app: Application) : AndroidViewModel(app) {
                     ?: error("无法读取所选文件")
                 tickaJson.decodeFromString(AppData.serializer(), text)
             }.onSuccess { imported ->
+                I18n.lang = imported.settings.lang
                 _data.value.tasks.filter { !it.completed }
                     .forEach { ReminderScheduler.cancel(getApplication(), it.id) }
                 val merged = if (imported.settings.password.isBlank() && _data.value.settings.password.isNotBlank())
@@ -459,7 +479,18 @@ class TickaViewModel(app: Application) : AndroidViewModel(app) {
         val settings = _data.value.settings
         _data.value = AppData(settings = settings)
         persist()
+        store.clearBackups()
         showMessage(I18n.cleared)
+    }
+
+    fun setSkyBackdrop(enabled: Boolean) {
+        _data.update { d -> d.copy(settings = d.settings.copy(skyBackdrop = enabled)) }
+        persist()
+    }
+
+    fun setSkyCapacity(n: Int) {
+        _data.update { d -> d.copy(settings = d.settings.copy(skyCapacity = n.coerceIn(10, 99))) }
+        persist()
     }
 
     // ---------- 提醒 ----------
@@ -480,18 +511,19 @@ class TickaViewModel(app: Application) : AndroidViewModel(app) {
     /** 应用前台期间的兜底提醒（系统闹钟可能不精确） */
     private fun checkInAppReminders() {
         val nowMs = now.value
-        var changed = false
-        val tasks = _data.value.tasks.map { t ->
-            if (!t.completed && !t.remindFired && t.remindAt != null && t.remindAt <= nowMs) {
-                ReminderScheduler.notifyNow(getApplication(), "⏰ ${t.title}", I18n.notifyTodoBody)
-                AlarmPlayer.play(getApplication(), 8L)
-                changed = true
-                t.copy(remindFired = true)
-            } else t
+        val due = _data.value.tasks.filter {
+            !it.completed && !it.remindFired && it.remindAt != null && it.remindAt <= nowMs
         }
-        if (changed) {
-            _data.value = _data.value.copy(tasks = tasks)
-            persist()
+        if (due.isEmpty()) return
+        _data.update { d ->
+            d.copy(tasks = d.tasks.map { t ->
+                if (due.any { it.id == t.id }) t.copy(remindFired = true) else t
+            })
         }
+        due.forEach {
+            ReminderScheduler.notifyNow(getApplication(), "⏰ ${it.title}", I18n.notifyTodoBody)
+        }
+        AlarmPlayer.play(getApplication(), 8L)
+        persist()
     }
 }
